@@ -76,11 +76,13 @@ def update_ami(user,password,ami_id):
                         print "Fetching AWS config"
                         if not browser.is_text_present('Fetching', wait_time=1):
                             break
-                    button = browser.find_link_by_text('edit')
-                    button.first.click()
-                    browser.find_by_id('-ufd-teamcity-ui-source-id').fill("Public AMI")
-                    browser.find_by_id('-ufd-teamcity-ui-source-id').fill(Keys.TAB)
-                    browser.find_by_id('source-id-custom').fill(ami_id)
+                    browser.find_by_xpath('//*[@id="amazonImagesTable"]/tbody/tr[2]/td[7]/a').click()
+                    time.sleep(3)
+                    #button.first.click()
+                    browser.find_by_id('-ufd-teamcity-ui-amazon-id').fill("Public AMI")
+                    browser.find_by_id('-ufd-teamcity-ui-amazon-id').fill(Keys.ENTER)
+                    browser.find_by_id('-ufd-teamcity-ui-amazon-id').fill(Keys.TAB)
+                    browser.find_by_id('amazon-id-custom').fill(ami_id)
                     button = browser.find_by_id('addImageButton')
                     button.first.click()
                     if browser.is_text_present('The changes are not yet saved.', wait_time=None):

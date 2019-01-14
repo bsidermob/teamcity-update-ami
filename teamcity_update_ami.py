@@ -1,29 +1,28 @@
 ### Description
-# This updates AWS AMI ID in TeamCity. As there is no way to do this through API,
-# it uses a good-old Selenium browser emulation
+# This updates AWS AMI ID in TeamCity through REST API
 #
-# Uncomment pyvirtualdisplay to run this stuff in Linux docker container.
-# Run it in something like this Docker image:
-# https://hub.docker.com/r/markadams/chromium-xvfb-py2/
 #
-# script usage:
-# python teamcity_update_ami.py -ami ami-03ea8eaad408d15dc -profile AWS-BuildNode-Ubuntu
-# # Or to get current AMI ID:
-# python teamcity_update_ami.py -profile AWS-BuildNode-Ubuntu -getCurrentAmi
+# usage:
+# python teamcity_update_ami.py -profile AWS-Ubuntu-Node -ami ami-03ea8eaad408d15dc 
+# Or to get current AMI ID:
+# python teamcity_update_ami.py -profile AWS-Ubuntu-Node -getCurrentAmi
+#
+# It expects credentials from a teamcity.txt file in this format:
+# teamcity_user=tc_user
+# teamcity_password=tc_pss
 #
 
 import time
-from splinter import Browser
-#from pyvirtualdisplay import Display
-from selenium import webdriver
-from selenium.webdriver.common.keys import Keys
 import argparse
 import re
-from tenacity import retry, stop_after_attempt, wait_fixed, RetryError
+#from tenacity import retry, stop_after_attempt, wait_fixed, RetryError
+import requests
+from requests.auth import HTTPBasicAuth
+import lxml.etree as etree
 
 ### Global variables
 teamcity_credentials_file = "teamcity.txt"
-teamcity_url = "http://"
+teamcity_url = "http://teamcity-server"
 
 # Enable argument parser
 parser = argparse.ArgumentParser()
@@ -33,111 +32,119 @@ parser.add_argument("-getCurrentAmi", action='store_true', required=False)
 args = parser.parse_args()
 
 ### Functions
-def load_credentials(type):
+def load_credentials():
     # Load oauth key
     with open(teamcity_credentials_file, 'r') as f:
         # Read the file
         Teamcity_credentials = f.read().splitlines()
         # Split the line in two credentials
-        teamcity_user = Teamcity_credentials[0].split('=')[1]
-        teamcity_password = Teamcity_credentials[1].split('=')[1]
+        global username
+        global password
+        username = Teamcity_credentials[0].split('=')[1]
+        password = Teamcity_credentials[1].split('=')[1]
         f.close()
-    if type == 'user':
-        return teamcity_user
-    elif type == 'password':
-        return teamcity_password
 
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(5))
-def update_ami(user,password,ami_id):
-    if args.ami:
-        print "updating TeamCity profile " + args.profile + " with AMI ID: " + args.ami
-        # Initiliase virtual browser
-        #display = Display(visible=0, size=(1366, 768))
-        #display.start()
-        #browser = webdriver.Chrome()
-        #browser.set_window_size(1366, 768)
+def get_profile_url(profile_name):
+    try:
+        request = requests.get(teamcity_url + '/httpAuth/app/rest/latest/projects/id:_Root',
+                               auth=HTTPBasicAuth(username, password)).text.encode(
+                'utf-8')
+        tree = etree.fromstring(request)
+        for child in tree.findall("./projectFeatures/*[@type='CloudProfile']"):
+            for x in child.findall("./properties/*"):
+                var = x.get('name'), x.get('value')
+                # print var
+                if var[0] == "name" and var[1] == profile_name:
+                    #print var
+                    global profile_id
+                    profile_id = child.get('id')
+                    print "Profile ID: " + profile_id
         try:
-            with Browser('chrome') as browser:
-                # Open Login page
-                url = teamcity_url
-                browser.visit(url)
-                browser.find_by_id('username').fill(user)
-                browser.find_by_id('password').fill(password)
-                button = browser.find_by_name('submitLogin')
-                button.first.click()
-                if browser.is_text_present('Projects', wait_time=10):
-                    # Open Cloud Profile page
-                    url = teamcity_url + "admin/editProject.html?projectId=_Root&tab=clouds"
-                    browser.visit(url)
-                    button = browser.find_by_text(args.profile)
-                    button.first.click()
-                    # Wait until AWS config is fetched
-                    while browser.is_text_present('Fetching', wait_time=1):
-                        print "Fetching AWS config"
-                        if not browser.is_text_present('Fetching', wait_time=1):
-                            break
-                    browser.find_by_xpath('//*[@id="amazonImagesTable"]/tbody/tr[2]/td[7]/a').click()
-                    time.sleep(3)
-                    #button.first.click()
-                    browser.find_by_id('-ufd-teamcity-ui-amazon-id').fill("Public AMI")
-                    browser.find_by_id('-ufd-teamcity-ui-amazon-id').fill(Keys.ENTER)
-                    browser.find_by_id('-ufd-teamcity-ui-amazon-id').fill(Keys.TAB)
-                    browser.find_by_id('amazon-id-custom').fill(ami_id)
-                    button = browser.find_by_id('addImageButton')
-                    button.first.click()
-                    if browser.is_text_present('The changes are not yet saved.', wait_time=None):
-                        print "Save button found"
-                        button = browser.find_by_name('save')
-                        button.first.click()
-                    else:
-                        print "no changes made"
-                    if browser.is_text_present('You removed the following sources'):
-                        button = browser.find_by_id('removeImageConfirmButton')
-                        button.first.click()
-                        print("Terminating active agents")
-                    else:
-                        print("No active agents running. Good.")
-                    print "Finished updating AMI ID"
-        except:
+            profile_id
+        except NameError:
+            print "Error. Profile not found. Check profile name"
             raise Exception
 
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(5))
-def get_ami_in_use(user,password):
-    if args.getCurrentAmi:
-        # Initiliase virtual browser
-        #display = Display(visible=0, size=(1366, 768))
-        #display.start()
-        #browser = webdriver.Chrome()
-        #browser.set_window_size(1366, 768)
+        for child in tree.findall("./projectFeatures/*[@type='CloudImage']"):
+            for x in child.findall("./properties/*"):
+                var = x.get('name'), x.get('value')
+                # print var
+                if var[0] == "profileId" and var[1] == profile_id:
+                    #print var
+                    global link
+                    link = child.get('href')
+                    print "Link: " + teamcity_url + link
+                    return link
+    except:
+        print request.content
+
+
+def modify_property(propertyName, value):
+    if not args.getCurrentAmi:
         try:
-            with Browser('chrome') as browser:
-                # Open Login page
-                url = teamcity_url
-                browser.visit(url)
-                browser.find_by_id('username').fill(user)
-                browser.find_by_id('password').fill(password)
-                button = browser.find_by_name('submitLogin')
-                button.first.click()
-                if browser.is_text_present('Projects', wait_time=10):
-                    # Open Cloud Profile page
-                    url = teamcity_url + "admin/editProject.html?projectId=_Root&tab=clouds"
-                    browser.visit(url)
-                    button = browser.find_by_text(args.profile)
-                    button.first.click()
-                    # Wait until AWS config is fetched
-                    while browser.is_text_present('Fetching', wait_time=1):
-                        #rint "Fetching AWS config"
-                        if not browser.is_text_present('Fetching', wait_time=1):
-                            break
-                    element = browser.find_by_id('amazonImagesTable')
-                    ami_in_use = re.findall("Id: (.*)", element.text)
-                    print ami_in_use[0]
-        except:
+            request = requests.get(teamcity_url + link, auth=HTTPBasicAuth(username, password)).text.encode(
+                'utf-8')
+            object = etree.fromstring(request)
+            text = etree.tostring(object, pretty_print=True)
+            headers = {'Content-Type': 'application/xml'}
+            # Modify attribute to a new one with RegEx
+            var = '<property name="' + propertyName + '" value="' + value + '"/>'
+            payload = re.sub(r'<property name="' + propertyName + '" value=\"[\s\S]*?/>', var, text)
+            r = requests.put(teamcity_url + link, auth=HTTPBasicAuth(username, password), data=payload,
+                             headers=headers)
+            #print r.text
+        except Exception, e:
+            print "Update failed: " + str(e)
+            print r.content
+
+def get_ami_in_use(link):
+    try:
+        request = requests.get(teamcity_url + link,
+                               auth=HTTPBasicAuth(username, password)).text.encode(
+                'utf-8')
+        tree = etree.fromstring(request)
+        for child in tree.findall("./properties/*"):
+            var = child.get('name'), child.get('value')
+            if var[0] == "amazon-id":
+                #return child.get('value')
+                global currentAmi
+                currentAmi = child.get('value')
+                print "Current AMI ID: " + currentAmi
+    except:
+        print "Failed to obtain current AMI id"
+        raise Exception
+
+def compare_amis(newAmi):
+    if not args.getCurrentAmi:
+        if currentAmi == newAmi:
+            print "AMI update OK"
+        else:
+            print "AMI ids don't match. Update failed."
             raise Exception
 
+def clean_up_unauthorized_agents():
+    if not args.getCurrentAmi:
+        suburl = "/app/rest/latest/agents?locator=authorized:no"
+        request = requests.get(teamcity_url + suburl,
+                               auth=HTTPBasicAuth(username, password)).text.encode(
+                            'utf-8')
+        tree = etree.fromstring(request)
+        print "Doing clean up..."
+        try:
+            for child in tree.findall("*"):
+                print "Deleting unauthorized agent " + child.get('name')
+                href = child.get('href')
+                r = requests.delete(teamcity_url + href,
+                           auth=HTTPBasicAuth(username, password))
+                print r.content
+        except:
+            pass
 
-### Start of functions
-#print load_credentials("user")
-#print load_credentials("password")
-update_ami(load_credentials("user"),load_credentials("password"),args.ami)
-get_ami_in_use(load_credentials("user"),load_credentials("password"))
+if __name__ == "__main__":
+    load_credentials()
+    get_profile_url(args.profile)
+    modify_property('amazon-id', args.ami)
+    modify_property('source-id', args.ami)
+    get_ami_in_use(link)
+    clean_up_unauthorized_agents()
+    compare_amis(args.ami)
